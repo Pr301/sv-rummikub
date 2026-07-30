@@ -60,9 +60,15 @@
 	class:animate-expired={timer.expired}
 	style="--player: {color}"
 >
-	<div class="flex items-center gap-3 px-4 pt-3">
-		<span class="size-2.5 shrink-0 rounded-full" style="background: {color}"></span>
-		<p class="min-w-0 flex-1 truncate text-sm font-medium">
+	<div
+		class="flex items-center gap-3 px-4 pt-3 pb-2"
+		style="background: color-mix(in srgb, {color} 16%, transparent)"
+	>
+		<span class="size-3.5 shrink-0 rounded-full" style="background: {color}"></span>
+		<p
+			class="min-w-0 flex-1 truncate font-tile text-2xl font-bold tracking-tight"
+			style="color: {color}"
+		>
 			{app.playerName(activeId)}
 		</p>
 		<button
