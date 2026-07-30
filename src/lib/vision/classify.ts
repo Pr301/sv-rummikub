@@ -1,4 +1,5 @@
-import { hueDistance, meanHue, otsuThreshold, rgbToHsv, type Box, type Frame } from './image';
+import { hueDistance, type Box } from './image';
+import type { Numeral } from './glyphs';
 import type { TileColor, TileValue } from './tiles';
 import type { ColorCalibration } from '$lib/types';
 
@@ -16,84 +17,14 @@ export const DEFAULT_HUES = { red: 6, orange: 32, blue: 214 };
 /** A tile's ink counts as black below this saturation. */
 export const DEFAULT_BLACK_SATURATION = 0.3;
 
-/** Crop inset — the outermost band of a detected box is bevel and shadow, not print. */
-const INSET = 0.14;
-/** The numeral sits above the small orientation dot near the tile's foot. */
-const NUMERAL_BAND = 0.74;
-
-export interface InkMask {
-	data: Uint8Array;
-	width: number;
-	height: number;
-	/** Ink pixels as a fraction of the inspected area — jokers cover far more than digits. */
-	coverage: number;
+export interface InkColor {
+	/** Degrees, 0–360. */
 	hue: number;
 	saturation: number;
 }
 
-/**
- * Separates printed ink from the tile face inside one candidate box. Dark ink is found by Otsu on
- * brightness; orange and red ink can be as bright as the cream face, so saturation catches those.
- */
-export function extractInk(frame: Frame, box: Box): InkMask {
-	const insetX = Math.round(box.width * INSET);
-	const insetY = Math.round(box.height * INSET);
-	const x0 = box.x + insetX;
-	const y0 = box.y + insetY;
-	const width = Math.max(1, box.width - insetX * 2);
-	const height = Math.max(1, box.height - insetY * 2);
-
-	const values = new Uint8Array(width * height);
-	const sats = new Float32Array(width * height);
-	const hues = new Float32Array(width * height);
-	const histogram = new Array<number>(256).fill(0);
-
-	for (let y = 0; y < height; y++) {
-		for (let x = 0; x < width; x++) {
-			const sx = Math.min(frame.width - 1, x0 + x);
-			const sy = Math.min(frame.height - 1, y0 + y);
-			const o = (sy * frame.width + sx) * 4;
-			const { h, s, v } = rgbToHsv(frame.data[o], frame.data[o + 1], frame.data[o + 2]);
-			const i = y * width + x;
-			const v8 = Math.round(v * 255);
-			values[i] = v8;
-			sats[i] = s;
-			hues[i] = h;
-			histogram[v8] += 1;
-		}
-	}
-
-	const threshold = otsuThreshold(histogram);
-	const data = new Uint8Array(width * height);
-	const inkHues: number[] = [];
-	const inkWeights: number[] = [];
-	let inkCount = 0;
-	let satSum = 0;
-
-	for (let i = 0; i < data.length; i++) {
-		const isInk = values[i] < threshold || sats[i] > 0.45;
-		if (!isInk) continue;
-		data[i] = 1;
-		inkCount += 1;
-		satSum += sats[i];
-		if (sats[i] > 0.2) {
-			inkHues.push(hues[i]);
-			inkWeights.push(sats[i]);
-		}
-	}
-
-	return {
-		data,
-		width,
-		height,
-		coverage: inkCount / data.length,
-		hue: meanHue(inkHues, inkWeights),
-		saturation: inkCount === 0 ? 0 : satSum / inkCount
-	};
-}
-
 export function classifyColor(
-	ink: Pick<InkMask, 'hue' | 'saturation'>,
+	ink: InkColor,
 	calibration: ColorCalibration | null
 ): { color: TileColor; confidence: number } {
 	const hues = calibration?.hues ?? DEFAULT_HUES;
@@ -141,13 +72,21 @@ export function inkBounds(mask: Uint8Array, width: number, height: number): Box 
 	return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
 }
 
+/** Below this width-to-height ratio a region cannot hold two digits, so it is never cut. */
+const SPLIT_MIN_ASPECT = 1;
+/** The gap between two digits, as a fraction of the region's mean column weight. */
+const SPLIT_MAX_VALLEY = 0.3;
+
 /**
- * Splits the numeral into digits. Two digits are far wider relative to their height than one, so
- * the aspect ratio decides how many there are; the cut goes through the emptiest column.
+ * Splits a wide region into two digits, or leaves it whole.
+ *
+ * Being wide is necessary but nowhere near sufficient: a "9" is very nearly as wide as it is tall,
+ * and cutting it in half turns one right answer into two wrong ones. So the region is only cut when
+ * a real gap runs through it — a column carrying almost no ink, the white space between two
+ * printed digits. A "0" has a thin middle but never an empty one, which is exactly the distinction.
  */
 export function splitDigits(mask: Uint8Array, width: number, height: number, bounds: Box): Box[] {
-	const aspect = bounds.width / bounds.height;
-	if (aspect < 0.75) return [bounds];
+	if (bounds.width / bounds.height < SPLIT_MIN_ASPECT) return [bounds];
 
 	const columns = new Array<number>(bounds.width).fill(0);
 	for (let y = bounds.y; y < bounds.y + bounds.height; y++) {
@@ -167,6 +106,9 @@ export function splitDigits(mask: Uint8Array, width: number, height: number, bou
 			cut = i;
 		}
 	}
+
+	const mean = columns.reduce((sum, count) => sum + count, 0) / (columns.length || 1);
+	if (mean <= 0 || lowest > mean * SPLIT_MAX_VALLEY) return [bounds];
 
 	const left = { x: bounds.x, y: bounds.y, width: cut, height: bounds.height };
 	const right = {
@@ -201,8 +143,15 @@ function cropMask(mask: Uint8Array, width: number, height: number, box: Box): Ui
 }
 
 /**
- * Box-samples a glyph region down to the fixed template size, keeping the aspect ratio by padding
- * rather than stretching — a squashed "1" matches almost anything.
+ * Box-samples a glyph region onto the template grid, stretching it to fill.
+ *
+ * Aspect ratio is deliberately thrown away. It is tempting to preserve it — a squashed "1" does
+ * look like a lot of things — but the templates come from ordinary UI faces, whose digits are far
+ * narrower than the heavy, nearly square numerals actually printed on Rummikub tiles. Padding a
+ * photographed "9" to keep its proportions leaves it a different shape *and* a different size from
+ * every template, and it matches none of them. Stretching both to the same grid compares stroke
+ * layout, which is the part that identifies a digit, and leaves width to `splitDigits` and the
+ * 1–13 range check to police.
  */
 export function normalizeGlyph(
 	mask: Uint8Array,
@@ -211,22 +160,18 @@ export function normalizeGlyph(
 	box: Box
 ): Float32Array {
 	const out = new Float32Array(GLYPH_WIDTH * GLYPH_HEIGHT);
-	const scale = Math.min(GLYPH_WIDTH / box.width, GLYPH_HEIGHT / box.height);
-	const drawWidth = Math.max(1, Math.round(box.width * scale));
-	const drawHeight = Math.max(1, Math.round(box.height * scale));
-	const offsetX = Math.floor((GLYPH_WIDTH - drawWidth) / 2);
-	const offsetY = Math.floor((GLYPH_HEIGHT - drawHeight) / 2);
 
-	for (let ty = 0; ty < drawHeight; ty++) {
+	for (let ty = 0; ty < GLYPH_HEIGHT; ty++) {
 		// Work out the source window in box-relative coordinates first, then shift it into the mask.
 		// Mixing the two makes the window grow with the box's position and averages the glyph flat.
-		const ry0 = Math.floor((ty / drawHeight) * box.height);
-		const ry1 = Math.max(ry0 + 1, Math.floor(((ty + 1) / drawHeight) * box.height));
+		const ry0 = Math.floor((ty / GLYPH_HEIGHT) * box.height);
+		const ry1 = Math.max(ry0 + 1, Math.floor(((ty + 1) / GLYPH_HEIGHT) * box.height));
 		const sy0 = box.y + ry0;
 		const sy1 = box.y + ry1;
-		for (let tx = 0; tx < drawWidth; tx++) {
-			const rx0 = Math.floor((tx / drawWidth) * box.width);
-			const rx1 = Math.max(rx0 + 1, Math.floor(((tx + 1) / drawWidth) * box.width));
+
+		for (let tx = 0; tx < GLYPH_WIDTH; tx++) {
+			const rx0 = Math.floor((tx / GLYPH_WIDTH) * box.width);
+			const rx1 = Math.max(rx0 + 1, Math.floor(((tx + 1) / GLYPH_WIDTH) * box.width));
 			const sx0 = box.x + rx0;
 			const sx1 = box.x + rx1;
 
@@ -238,7 +183,7 @@ export function normalizeGlyph(
 					count += 1;
 				}
 			}
-			out[(ty + offsetY) * GLYPH_WIDTH + (tx + offsetX)] = count === 0 ? 0 : sum / count;
+			out[ty * GLYPH_WIDTH + tx] = count === 0 ? 0 : sum / count;
 		}
 	}
 
@@ -292,41 +237,48 @@ export interface TileReading {
 }
 
 /**
- * Reads one candidate box into a tile. Confidence is deliberately conservative: anything the
- * pipeline is unsure of lands below the floor and the UI makes the user confirm it.
+ * The glyphs of one numeral, normalised to template size and ordered left to right.
+ *
+ * Usually each digit is its own component and there is nothing to do. When ink bleeds — a heavy
+ * print, a low-resolution frame — two digits arrive fused into one wide component, so a component
+ * noticeably wider than a single digit is cut at its emptiest column instead.
  */
-export function classifyTile(
-	frame: Frame,
-	box: Box,
+function digitGlyphs(numeral: Numeral): Float32Array[] {
+	const ordered = [...numeral.glyphs].sort((a, b) => a.x - b.x);
+
+	if (ordered.length === 1) {
+		const glyph = ordered[0];
+		const full: Box = { x: 0, y: 0, width: glyph.width, height: glyph.height };
+		const parts = splitDigits(glyph.mask, glyph.width, glyph.height, full);
+		return parts.map((part) => normalizeGlyph(glyph.mask, glyph.width, glyph.height, part));
+	}
+
+	return ordered.map((glyph) =>
+		normalizeGlyph(glyph.mask, glyph.width, glyph.height, {
+			x: 0,
+			y: 0,
+			width: glyph.width,
+			height: glyph.height
+		})
+	);
+}
+
+/**
+ * Reads one numeral into a tile, or returns null when the digits do not spell a real tile.
+ *
+ * Returning null matters: a numeral that reads as 0, or 47, is not a tile the scanner should offer
+ * a guess at. Dropping it leaves the user one tap short in the picker, whereas inventing a tile
+ * quietly changes their score. Confidence is likewise conservative — anything the pipeline is
+ * unsure of lands below the floor and the UI makes the user confirm it.
+ */
+export function readNumeral(
+	numeral: Numeral,
 	templates: DigitTemplate[],
 	calibration: ColorCalibration | null
-): TileReading {
-	const ink = extractInk(frame, box);
-	const { color, confidence: colorConfidence } = classifyColor(ink, calibration);
-
-	// Restrict digit-finding to the band above the orientation dot.
-	const bandHeight = Math.max(1, Math.round(ink.height * NUMERAL_BAND));
-	const band = cropMask(ink.data, ink.width, ink.height, {
-		x: 0,
-		y: 0,
-		width: ink.width,
-		height: bandHeight
-	});
-
-	const bounds = inkBounds(band, ink.width, bandHeight);
-	if (!bounds) {
-		return { value: 'joker', color, confidence: 0.2 };
-	}
-
-	// A joker's face floods the tile; a numeral never covers this much of it.
-	if (ink.coverage > 0.34) {
-		return { value: 'joker', color, confidence: 0.45 };
-	}
-
-	const parts = splitDigits(band, ink.width, bandHeight, bounds);
-	const reads = parts.map((part) =>
-		matchGlyph(normalizeGlyph(band, ink.width, bandHeight, part), templates)
-	);
+): TileReading | null {
+	const { color, confidence: colorConfidence } = classifyColor(numeral, calibration);
+	const reads = digitGlyphs(numeral).map((glyph) => matchGlyph(glyph, templates));
+	if (reads.length === 0) return null;
 
 	let value: number;
 	let shapeConfidence: number;
@@ -341,9 +293,7 @@ export function classifyTile(
 		if (reads[0].digit !== 1) shapeConfidence *= 0.4;
 	}
 
-	if (!Number.isInteger(value) || value < 1 || value > 13) {
-		return { value: 'joker', color, confidence: 0.15 };
-	}
+	if (!Number.isInteger(value) || value < 1 || value > 13) return null;
 
 	return {
 		value: value as TileValue,

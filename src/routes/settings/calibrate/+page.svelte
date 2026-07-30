@@ -3,8 +3,8 @@
 	import { goto } from '$app/navigation';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { captureFrame } from '$lib/vision/detect';
-	import { extractInk, DEFAULT_HUES, DEFAULT_BLACK_SATURATION } from '$lib/vision/classify';
-	import { segment } from '$lib/vision/segment';
+	import { DEFAULT_HUES, DEFAULT_BLACK_SATURATION } from '$lib/vision/classify';
+	import { CLOSE_UP_GLYPH_OPTIONS, findGlyphs } from '$lib/vision/glyphs';
 	import { app } from '$lib/store.svelte';
 
 	type Step = 'red' | 'orange' | 'blue';
@@ -60,15 +60,15 @@
 			return;
 		}
 
-		// Use the largest tile-shaped region in frame — the one tile the user is holding up.
-		const candidates = segment(captured.frame);
-		const biggest = candidates.sort((a, b) => b.area - a.area)[0];
-		if (!biggest) {
-			error = 'No tile found. Fill more of the frame and try again.';
+		// The boldest mark in frame is the numeral on the one tile the user is holding up.
+		const ink = findGlyphs(captured.frame, CLOSE_UP_GLYPH_OPTIONS).sort(
+			(a, b) => b.area - a.area
+		)[0];
+		if (!ink) {
+			error = 'No numeral found. Fill more of the frame and try again.';
 			return;
 		}
 
-		const ink = extractInk(captured.frame, biggest);
 		if (ink.saturation < 0.2) {
 			error = 'That ink reads as black, not a colour. Try a more evenly lit shot.';
 			return;

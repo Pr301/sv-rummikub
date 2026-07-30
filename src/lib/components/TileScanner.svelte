@@ -300,6 +300,9 @@
 
 		<div class="mt-5">
 			<h3 class="eyebrow mb-2">Add a tile</h3>
+			<p class="mb-2 text-xs text-ink-faint">
+				The scanner reads printed numerals, so jokers are added here by hand.
+			</p>
 			<TilePicker onadd={addTile} />
 		</div>
 

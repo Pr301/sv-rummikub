@@ -26,6 +26,16 @@ export interface ScannedTile {
 
 export const CONFIDENCE_FLOOR = 0.62;
 
+/**
+ * Below this, a read is dropped rather than offered.
+ *
+ * Stray marks in a photo — crust on a loaf, a shadow, print on something else on the table — do
+ * sometimes survive the shape filters, but they match a digit template far worse than real print
+ * does. Discarding them costs the user a tap in the picker; keeping them silently adds points to
+ * someone's score, which is the more expensive mistake by far.
+ */
+export const DETECTION_FLOOR = 0.55;
+
 export function totalPoints(tiles: ScannedTile[]): number {
 	return tiles.reduce((sum, tile) => sum + tilePoints(tile.value), 0);
 }
