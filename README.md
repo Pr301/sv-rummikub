@@ -1,42 +1,77 @@
-# sv
+# Rummikub Scoreboard
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A phone-first scoreboard for in-person Rummikub. Keeps the running score, runs a turn clock, charts
+how the game is swinging, and can read a losing player's leftover tiles through the camera so nobody
+has to add them up by hand.
 
-## Creating a project
+Everything runs on the device. There is no backend, no account, and no network call — games live in
+`localStorage` and the tile scanner does its image processing in the browser.
 
-If you're seeing this, you've probably already done this step. Congrats!
+## Features
 
-```sh
-# create a new project
-npx sv create my-app
+- **Roster** — named players with their own colour, kept between games. Players who appear in past
+  games are archived rather than deleted, so history keeps their names.
+- **Official Rummikub scoring** — enter each loser's leftover tile points; they score that as a
+  negative and the winner scores the positive sum of everyone else's. Every round sums to zero.
+- **Turn clock** — 80 seconds by default (configurable), with beeps at 30s and 10s and an alarm at
+  zero that keeps sounding until you tap through to the next player. All sounds are synthesised with
+  the Web Audio API, so there are no audio files to load.
+- **Score chart** — a line per player, cumulative or per round, with an emphasised zero baseline and
+  a crosshair readout.
+- **Tile scanner** — point the camera at a rack, or pick a photo. Tiles are segmented, their ink
+  colour classified and their numeral matched against templates rendered from system fonts. Anything
+  read with low confidence is flagged and must be confirmed; a tile-by-tile picker is always
+  available to correct or replace the scan.
+- **History** — every finished game with its round-by-round table and the same chart.
+- **Installable PWA** — add to the home screen and it runs fullscreen and offline.
+
+## Running it
+
+```bash
+npm install
 ```
 
-To recreate this project with the same configuration:
-
-```sh
-# recreate this project
-npx sv@0.16.6 create --template minimal --types ts --add prettier eslint tailwindcss="plugins:typography,forms" mcp="ide:claude-code+setup:remote" --install npm sk-rummikub
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
+```bash
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
 
-## Building
+## Checks
 
-To create a production version of your app:
-
-```sh
-npm run build
+```bash
+npm run check && npm run lint && npm run test
 ```
 
-You can preview the production build with `npm run preview`.
+The tests cover the two places where correctness is not obvious by inspection: the scoring maths
+(`src/lib/scoring.ts`) and the vision pipeline's image processing (`src/lib/vision/`).
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+## Production build
+
+```bash
+npm run build && npm run preview
+```
+
+The app builds as a static SPA (`@sveltejs/adapter-static` with an `index.html` fallback), so it can
+be served from any static host. To verify offline behaviour, load the preview once, then stop the
+server and reload — the service worker serves the cached shell and the saved games are still there.
+
+## Notes on the camera
+
+`getUserMedia` only works in a secure context. That covers `localhost` and any `https://` origin, but
+**not** a plain-http dev server reached over the LAN — so testing the rear camera on a real phone
+needs HTTPS (for example via `@vitejs/plugin-basic-ssl`). Everywhere else, the "Choose a photo"
+button uses a plain file input with `capture="environment"`, which opens the native camera on mobile
+and works regardless.
+
+Detection is reliable with even lighting, tiles laid flat on a dark surface, and the camera roughly
+square on. It degrades when several of those go wrong at once, which is why low-confidence reads are
+flagged for confirmation and the manual picker is never more than a tap away. If red and orange get
+confused on your set, **Settings → Calibrate colours** measures your own tiles' inks once and uses
+them from then on.
+
+## Icons
+
+The PWA icons are generated, not hand-drawn — rerun after changing the mark:
+
+```bash
+node scripts/gen-icons.mjs
+```

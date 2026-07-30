@@ -2,8 +2,22 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 		<meta name="text-scale" content="scale" />
+
+		<meta
+			name="description"
+			content="Keep score, run the turn clock, and scan racks at the end of a round."
+		/>
+		<link rel="manifest" href="%sveltekit.assets%/manifest.webmanifest" />
+		<link rel="apple-touch-icon" href="%sveltekit.assets%/icons/apple-touch-icon.png" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-title" content="Rummikub" />
+		<meta name="mobile-web-app-capable" content="yes" />
+		<!-- Matches the rack and tile surfaces so the status bar blends into the app in both schemes. -->
+		<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#15120f" />
+		<meta name="theme-color" media="(prefers-color-scheme: light)" content="#e8dcc4" />
+
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
